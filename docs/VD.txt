@@ -1,0 +1,567 @@
+============================================================
+BLOGGR — DETAILED SYSTEM DESIGN
+STAGE 1: VALIDATION DESIGN
+============================================================
+
+Validation ensures that all data submitted to Bloggr is valid,
+safe, and acceptable before it reaches the database or business
+logic.
+
+The backend is the final authority for validation. Frontend
+validation is used mainly for better user experience.
+
+Principle:
+    Frontend validation → User experience
+    Backend validation  → Security + Data integrity
+
+------------------------------------------------------------
+1. USER VALIDATION
+------------------------------------------------------------
+
+User fields:
+
+    _id
+    name
+    email
+    password
+    bio
+    role
+    createdAt
+    updatedAt
+
+Registration validation:
+
+    name:
+        - Required
+        - Cannot be empty
+        - Reasonable length limit
+
+    email:
+        - Required
+        - Cannot be empty
+        - Must have valid email format
+        - Must be unique
+
+    password:
+        - Required
+        - Cannot be empty
+        - Must satisfy minimum length requirement
+        - Must be hashed before storage
+
+    role:
+        - Must NOT be accepted from normal registration input
+        - New users are always created with role = "user"
+        - Users cannot register themselves as admin
+
+Example of invalid/untrusted input:
+
+    {
+        "name": "Nived",
+        "email": "nived@example.com",
+        "password": "password123",
+        "role": "admin"
+    }
+
+The backend must not allow the user to assign themselves
+the admin role.
+
+The server determines:
+
+    role = "user"
+
+Passwords must never be stored as plain text.
+
+Plain text:
+    password = "mypassword123"
+
+Stored:
+    password = "$2b$10$..."
+
+The password will be hashed using bcrypt.
+
+
+------------------------------------------------------------
+2. BLOG VALIDATION
+------------------------------------------------------------
+
+Blog fields:
+
+    _id
+    title
+    content
+    author
+    status
+    tags[]
+    upvoteCount
+    downvoteCount
+    commentCount
+    createdAt
+    updatedAt
+
+
+Create Blog:
+
+Required fields:
+
+    title
+    content
+
+Validation:
+
+    title:
+        - Required
+        - Cannot be empty
+        - Maximum length limit
+
+    content:
+        - Required
+        - Cannot be empty
+        - Maximum length limit
+
+    tags:
+        - Optional
+        - Must be an array
+        - Each tag must satisfy length/format limits
+
+    status:
+        - Only allowed values:
+            draft
+            published
+
+
+The following fields must NOT be trusted from the client:
+
+    author
+    upvoteCount
+    downvoteCount
+    commentCount
+
+
+The server determines these values.
+
+Example:
+
+    Client sends:
+
+    {
+        "title": "My Blog",
+        "content": "Hello",
+        "author": "someOtherUser",
+        "upvoteCount": 999999
+    }
+
+    Server ignores/rejects the unauthorized fields and
+    determines:
+
+        author = currently logged-in user
+        upvoteCount = 0
+        downvoteCount = 0
+        commentCount = 0
+
+
+------------------------------------------------------------
+3. BLOG UPDATE VALIDATION
+------------------------------------------------------------
+
+For:
+
+    PUT /api/blogs/:id
+
+The backend performs validation in this order:
+
+    1. Authenticate the user
+           ↓
+    2. Check whether the blog exists
+           ↓
+    3. Check whether the user is authorized
+           ↓
+    4. Validate the submitted data
+           ↓
+    5. Update the blog
+
+
+If blog does not exist:
+
+    → 404 Not Found
+
+If user is not authorized:
+
+    → 403 Forbidden
+
+Authorization:
+
+    Blog author → Can edit own blog
+    Other user → Cannot edit
+    Admin       → Can perform permitted moderation actions
+
+
+------------------------------------------------------------
+4. COMMENT VALIDATION
+------------------------------------------------------------
+
+Comment fields:
+
+    _id
+    blog
+    author
+    content
+    parentComment
+    createdAt
+    updatedAt
+
+
+Create Comment:
+
+Required:
+
+    content
+
+The server determines:
+
+    author = currently logged-in user
+    blog = blog ID from the request URL
+
+
+Validation:
+
+    content:
+        - Required
+        - Cannot be empty
+        - Maximum length limit
+
+    parentComment:
+        - Optional
+        - Must reference a valid comment
+        - Must belong to the same blog
+
+    replies:
+        - Only one level of replies is allowed
+
+
+Allowed structure:
+
+    Comment
+       ├── Reply
+       ├── Reply
+       └── Reply
+
+
+Not allowed:
+
+    Comment
+       └── Reply
+            └── Reply
+                 └── Reply
+
+
+This keeps the comment system simple and manageable.
+
+
+------------------------------------------------------------
+5. VOTE VALIDATION
+------------------------------------------------------------
+
+Vote fields:
+
+    _id
+    user
+    blog
+    type
+    createdAt
+
+
+Allowed vote types:
+
+    upvote
+    downvote
+
+
+Before creating/updating a vote, the backend checks:
+
+    1. Is the user authenticated?
+           ↓
+    2. Does the blog exist?
+           ↓
+    3. Is the vote type valid?
+           ↓
+    4. Does the user already have a vote for this blog?
+           ↓
+    5. Apply the appropriate voting operation
+
+
+Voting rules:
+
+    No existing vote
+        ↓
+    Create vote
+
+
+    Existing UPVOTE
+    + user selects DOWNVOTE
+        ↓
+    Change vote to DOWNVOTE
+
+
+    Existing DOWNVOTE
+    + user selects UPVOTE
+        ↓
+    Change vote to UPVOTE
+
+
+    Existing UPVOTE
+    + user selects UPVOTE again
+        ↓
+    Remove vote
+
+
+    Existing DOWNVOTE
+    + user selects DOWNVOTE again
+        ↓
+    Remove vote
+
+
+A unique compound constraint is maintained on:
+
+    (user, blog)
+
+Therefore, one user can have only one active vote
+for a particular blog.
+
+
+------------------------------------------------------------
+6. REPORT VALIDATION
+------------------------------------------------------------
+
+Report fields:
+
+    _id
+    reporter
+    targetType
+    target
+    reason
+    description
+    status
+    createdAt
+    updatedAt
+
+
+User supplies:
+
+    targetType
+    target
+    reason
+    description
+
+
+Server supplies:
+
+    reporter = currently logged-in user
+    status = pending
+
+
+Allowed targetType:
+
+    blog
+    comment
+
+
+Allowed reasons:
+
+    spam
+    harassment
+    hate
+    misinformation
+    inappropriate
+    other
+
+
+Validation:
+
+    targetType:
+        - Must be "blog" or "comment"
+
+    target:
+        - Must be a valid ID
+        - The referenced object must actually exist
+        - The object must match targetType
+
+    reason:
+        - Must be one of the predefined reasons
+
+    description:
+        - Optional
+        - Maximum length limit
+
+
+Example:
+
+    targetType = "blog"
+    target = <blog_id>
+
+The backend verifies that the specified blog actually exists.
+
+The same applies when targetType is "comment".
+
+
+------------------------------------------------------------
+7. VALIDATION LAYERS
+------------------------------------------------------------
+
+Bloggr uses multiple levels of validation:
+
+                    CLIENT
+                       │
+                       ▼
+              Basic validation
+                       │
+                       ▼
+                 EXPRESS API
+                       │
+                       ▼
+              Request validation
+                       │
+                       ▼
+                 CONTROLLER
+                       │
+                       ▼
+             Business validation
+                       │
+                       ▼
+                  MONGOOSE
+                       │
+                       ▼
+              Schema validation
+                       │
+                       ▼
+                  MONGODB
+
+
+Frontend validation:
+    - Provides immediate feedback
+    - Improves user experience
+    - Prevents obvious invalid input
+
+
+Backend validation:
+    - Cannot be bypassed
+    - Protects application logic
+    - Protects database integrity
+    - Performs authorization-related checks
+
+
+Mongoose validation:
+    - Enforces schema-level rules
+    - Provides another layer of data integrity
+
+
+------------------------------------------------------------
+8. IMPORTANT VALIDATION PRINCIPLE
+------------------------------------------------------------
+
+NEVER TRUST CLIENT-SUPPLIED DATA.
+
+The backend must determine and verify:
+
+    - Who the user is
+    - Whether the user is authenticated
+    - What role the user has
+    - Who owns a blog
+    - Who owns a comment
+    - Whether the user can edit/delete content
+    - Whether a blog/comment exists
+    - Whether a vote is valid
+    - Whether a report target exists
+    - Report status
+    - Vote/comment counts
+    - Author/user references
+
+
+Example:
+
+    Client:
+        "author": "another_user"
+
+    Backend:
+        author = authenticated user's ID
+
+
+The client should request an operation;
+the server decides whether that operation is valid.
+
+
+------------------------------------------------------------
+9. OVERALL VALIDATION FLOW
+------------------------------------------------------------
+
+Example: Creating a Blog
+
+    Browser
+       ↓
+    Frontend validation
+       ↓
+    POST /api/blogs
+       ↓
+    Authentication middleware
+       ↓
+    Request validation
+       ↓
+    Controller
+       ↓
+    Business validation
+       ↓
+    Mongoose validation
+       ↓
+    MongoDB
+       ↓
+    Success response
+
+
+Example: Editing a Blog
+
+    Request
+       ↓
+    Is user authenticated?
+       ↓
+    Does blog exist?
+       ↓
+    Is user the author/admin?
+       ↓
+    Is submitted data valid?
+       ↓
+    Update blog
+       ↓
+    Return response
+
+
+============================================================
+VALIDATION DESIGN COMPLETE
+============================================================
+
+Main principle:
+
+    Validate user input.
+    Verify ownership.
+    Verify references.
+    Do not trust client-controlled fields.
+    Enforce schema rules.
+    Keep backend validation as the final authority.
+
+Next Detailed Design Stage:
+
+    STAGE 2 — ERROR HANDLING DESIGN
+
+Topics:
+
+    - HTTP status codes
+    - 400 Bad Request
+    - 401 Unauthorized
+    - 403 Forbidden
+    - 404 Not Found
+    - 409 Conflict
+    - 500 Internal Server Error
+    - Validation error responses
+    - Database error responses
+    - Authentication errors
+    - Global Express error-handling middleware
+    - Standard Bloggr API error-response format
+============================================================

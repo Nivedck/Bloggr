@@ -1,0 +1,965 @@
+BLOGGR - COMPLETE SYSTEM DESIGN
+=================================
+
+Project: Bloggr
+Type: Web-based Blogging Platform
+Target Users: Students and Teachers
+Roles:
+- user
+- admin (exactly one account, belonging to the project owner)
+
+TECHNOLOGY STACK
+================
+Frontend: HTML, CSS, Vanilla JavaScript, Fetch API
+Backend: Node.js, Express.js
+Database: MongoDB, Mongoose
+
+Architecture:
+- Client-Server Architecture
+- Modular Monolith
+- Layered backend
+
+High-level flow:
+Browser
+  -> HTTP/HTTPS + JSON
+Node.js + Express.js
+  -> Mongoose
+MongoDB
+
+Backend request flow:
+Request -> Routes -> Middleware -> Controller -> Service -> Model -> MongoDB
+
+Routes map URLs to operations.
+Middleware handles authentication, authorization, validation and common processing.
+Controllers handle HTTP requests/responses.
+Services contain business logic.
+Models use Mongoose to interact with MongoDB.
+
+
+1. DATABASE DESIGN
+==================
+
+Five collections:
+1. users
+2. blogs
+3. comments
+4. votes
+5. reports
+
+
+USERS
+-----
+Fields:
+_id
+name
+email
+password
+bio
+role
+createdAt
+updatedAt
+
+Rules:
+- email is unique.
+- password stores a secure hash, never plaintext.
+- role is "user" or "admin".
+- Every new registration gets role = "user".
+- Users cannot select admin during registration.
+- Exactly one admin account exists.
+- No student/teacher permission distinction.
+- profileImage is not included.
+
+BLOGS
+-----
+Fields:
+_id
+title
+content
+author
+status
+tags[]
+upvoteCount
+downvoteCount
+commentCount
+createdAt
+updatedAt
+
+Rules:
+- author references User.
+- status is "draft" or "published".
+- tags are embedded in the Blog document.
+- vote counts are cached on Blog.
+- commentCount is cached on Blog.
+- Actual votes and comments are separate collections.
+
+COMMENTS
+--------
+Fields:
+_id
+blog
+author
+content
+parentComment
+createdAt
+updatedAt
+
+Rules:
+- blog references Blog.
+- author references User.
+- parentComment references Comment or is null.
+- Only one level of replies is supported.
+
+Example:
+Comment
+  +-- Reply
+  +-- Reply
+
+Deep nesting is not allowed.
+
+VOTES
+-----
+Fields:
+_id
+user
+blog
+type
+createdAt
+
+Rules:
+- type = "upvote" or "downvote".
+- One active vote per user per blog.
+- Create a unique compound index on (user, blog).
+- Changing a vote updates the existing vote.
+- Removing a vote deletes the vote.
+- Blog stores cached upvoteCount/downvoteCount.
+
+Purpose:
+- votes stores who voted and what type.
+- Blog counters provide fast totals.
+
+REPORTS
+-------
+Fields:
+_id
+reporter
+targetType
+target
+reason
+description
+status
+createdAt
+updatedAt
+
+Rules:
+- reporter references User.
+- targetType = "blog" or "comment".
+- target stores the corresponding Blog/Comment ID.
+- Backend validates that the target exists and matches targetType.
+- reason = spam, harassment, hate, misinformation, inappropriate, or other.
+- description is optional.
+- status = pending, reviewed, resolved, or rejected.
+
+
+2. DATABASE RELATIONSHIPS
+=========================
+
+1 User -> many Blogs
+2 User -> many Comments
+3 User -> many Votes
+4 User -> many Reports
+5 Blog -> many Comments
+6 Blog -> many Votes
+7 Blog -> many Reports
+8 Comment -> many Replies (one level)
+
+User and Blog form a many-to-many relationship through Votes, with the
+unique (user, blog) constraint allowing only one active vote.
+
+
+3. AUTHENTICATION MODULE
+========================
+
+Authentication answers: "Who is the user?"
+
+Bloggr uses session-based authentication.
+
+API:
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/users/me
+PUT  /api/users/me
+GET  /api/users/me/blogs
+
+REGISTRATION
+------------
+POST /api/auth/register
+
+Example request:
+{
+  "name": "Nived",
+  "email": "user@example.com",
+  "password": "mypassword"
+}
+
+Flow:
+Request
+ -> Validate input
+ -> Check email
+ -> Hash password
+ -> Create User
+ -> MongoDB
+ -> Create session
+ -> Send session cookie
+
+The client does not choose the author ID or admin role.
+
+PASSWORD SECURITY
+-----------------
+Use bcrypt or another suitable password-hashing library.
+
+Registration:
+Plain password -> bcrypt -> password hash -> MongoDB
+
+Login:
+Entered password -> bcrypt comparison -> stored hash -> match/reject
+
+LOGIN
+-----
+POST /api/auth/login
+
+Flow:
+Email + password
+ -> Find user by email
+ -> Compare password hash
+ -> If correct, create session
+ -> Send cookie
+
+SESSION
+-------
+The server associates a session with the authenticated user.
+The browser stores the session identifier in a cookie and sends it with
+future requests.
+
+Request:
+Browser + session cookie
+ -> Authentication middleware
+ -> Identify user
+ -> req.user
+ -> Controller
+
+LOGOUT
+------
+POST /api/auth/logout
+
+Flow:
+Request -> Destroy session -> Clear session cookie -> Logged out
+
+
+4. AUTHORIZATION MODULE
+=======================
+
+Authorization answers: "What is the user allowed to do?"
+
+Two types:
+1. Role-based authorization
+2. Ownership-based authorization
+
+ROLE-BASED
+----------
+Roles:
+- user
+- admin
+
+There is exactly one admin account.
+There is no admin registration or promotion interface.
+
+Normal users can:
+- create blogs
+- edit their own blogs
+- delete their own blogs
+- publish their own blogs
+- comment
+- vote
+- report content
+
+Admin can:
+- review reports
+- delete inappropriate blogs
+- delete inappropriate comments
+- view/manage users as required
+- perform moderation
+
+AUTHENTICATION MIDDLEWARE
+-------------------------
+Checks whether the user has a valid session.
+
+No valid session -> 401 Unauthorized
+Valid session -> req.user -> continue
+
+ADMIN AUTHORIZATION
+-------------------
+Admin-only requests require:
+Authentication -> role check -> controller
+
+Not logged in -> 401
+Logged in but not admin -> 403 Forbidden
+
+OWNERSHIP AUTHORIZATION
+-----------------------
+For user-owned resources:
+blog.author == req.user._id
+or
+comment.author == req.user._id
+
+If false -> 403 Forbidden.
+
+The admin can moderate another user's content, but moderation does not
+change the original authorship.
+
+
+5. BLOG MODULE
+==============
+
+Responsibilities:
+- Create blogs
+- Save drafts
+- Publish blogs
+- Read blogs
+- Edit blogs
+- Delete blogs
+- List blogs
+
+API:
+GET    /api/blogs
+GET    /api/blogs/:id
+POST   /api/blogs
+PUT    /api/blogs/:id
+DELETE /api/blogs/:id
+POST   /api/blogs/:id/publish
+GET    /api/users/me/blogs
+
+CREATE
+------
+POST /api/blogs
+
+Request:
+{
+  "title": "Introduction to Machine Learning",
+  "content": "Machine learning is...",
+  "tags": ["ML", "Python", "AI"]
+}
+
+Server determines:
+author = logged-in user
+status = "draft"
+
+Flow:
+Browser
+ -> Authentication
+ -> Validation
+ -> Controller
+ -> Service
+ -> Blog Model
+ -> MongoDB
+
+DRAFT
+-----
+New blogs start as draft.
+Drafts:
+- visible to their author
+- editable by their author
+- not in the public blog list
+- not publicly readable by other users
+
+PUBLISH
+-------
+POST /api/blogs/:id/publish
+
+Flow:
+Authentication
+ -> Check blog exists
+ -> Check ownership
+ -> Change status to published
+ -> MongoDB
+
+READ
+----
+GET /api/blogs
+
+Only published blogs appear publicly.
+
+Pagination example:
+GET /api/blogs?page=1&limit=10
+
+Single blog:
+GET /api/blogs/:id
+
+Published -> public
+Draft -> only author can access
+
+EDIT
+----
+PUT /api/blogs/:id
+
+Only the owner can edit a normal blog.
+
+DELETE
+------
+DELETE /api/blogs/:id
+Normal user: own blog only.
+
+DELETE /api/admin/blogs/:id
+Admin: any blog for moderation.
+
+BLOG DELETION CASCADE
+---------------------
+Deleting a blog should also remove:
+- associated comments
+- associated votes
+- associated reports targeting the blog
+
+Preferred sequence:
+transaction
+ -> delete comments
+ -> delete votes
+ -> delete reports
+ -> delete blog
+ -> commit
+
+This should ideally use a MongoDB transaction.
+
+BLOG LIFECYCLE
+--------------
+Create -> Draft -> Publish -> Published -> Edit/Delete
+
+
+6. COMMENT MODULE
+=================
+
+Responsibilities:
+- Add comments
+- Read comments
+- Edit own comments
+- Delete comments
+- One-level replies
+
+API:
+GET    /api/blogs/:id/comments
+POST   /api/blogs/:id/comments
+PUT    /api/comments/:id
+DELETE /api/comments/:id
+POST   /api/comments/:id/replies
+
+ADD COMMENT
+-----------
+POST /api/blogs/:id/comments
+
+Request:
+{
+  "content": "Very useful article!"
+}
+
+Server determines:
+blog = URL blog ID
+author = logged-in user
+parentComment = null
+
+Flow:
+Authentication
+ -> Check blog exists
+ -> Check blog is published
+ -> Validate
+ -> Create comment
+ -> Increment Blog.commentCount
+
+READ COMMENTS
+-------------
+GET /api/blogs/:id/comments
+
+Returns comments belonging to the blog. Replies are associated using
+parentComment.
+
+REPLY
+-----
+POST /api/comments/:id/replies
+
+Request:
+{
+  "content": "I agree!"
+}
+
+Flow:
+- Find parent comment.
+- Verify it exists.
+- Verify it is a top-level comment.
+- Verify its blog is valid/published.
+- Create reply with parentComment = parent ID.
+
+A reply cannot itself have another reply.
+
+EDIT
+----
+PUT /api/comments/:id
+
+Only the comment author can edit it.
+
+DELETE
+------
+DELETE /api/comments/:id
+
+Normal user: own comment.
+Admin: any comment for moderation.
+
+The exact behavior when deleting a parent comment with replies is not yet
+finalized. Options:
+1. Delete replies too.
+2. Preserve replies and show the parent as deleted.
+
+COMMENT COUNT
+-------------
+commentCount represents total comments + replies for the blog.
+
+Example:
+Comment 1
+Comment 2
+  Reply 1
+Comment 3
+
+commentCount = 4
+
+New comment/reply -> commentCount++
+Permanent deletion -> commentCount--
+
+
+7. VOTING MODULE
+================
+
+Supports:
+- upvote
+- downvote
+- upvote -> downvote
+- downvote -> upvote
+- remove vote
+
+API:
+GET    /api/blogs/:id/vote
+POST   /api/blogs/:id/vote
+DELETE /api/blogs/:id/vote
+
+All require authentication.
+
+FIRST UPVOTE
+------------
+POST /api/blogs/:id/vote
+{
+  "type": "upvote"
+}
+
+No existing vote:
+- create vote
+- upvoteCount++
+
+FIRST DOWNVOTE
+--------------
+No existing vote:
+- create vote
+- downvoteCount++
+
+UPVOTE -> DOWNVOTE
+------------------
+- Change existing Vote.type to downvote.
+- upvoteCount--
+- downvoteCount++
+
+DOWNVOTE -> UPVOTE
+------------------
+- Change existing Vote.type to upvote.
+- downvoteCount--
+- upvoteCount++
+
+REMOVE
+------
+DELETE /api/blogs/:id/vote
+
+If current vote is upvote:
+- delete vote
+- upvoteCount--
+
+If current vote is downvote:
+- delete vote
+- downvoteCount--
+
+VOTING STATE TABLE
+------------------
+Existing | Action   | Database       | Counters
+None     | Upvote   | Create upvote  | Up +1
+None     | Downvote | Create downvote| Down +1
+Upvote   | Downvote | Change type    | Up -1, Down +1
+Downvote | Upvote   | Change type    | Down -1, Up +1
+Upvote   | Remove   | Delete vote    | Up -1
+Downvote | Remove   | Delete vote    | Down -1
+
+WHY VOTES + COUNTS?
+-------------------
+Vote documents preserve voter identity and vote type.
+Blog counters provide fast totals for display.
+
+The vote update and Blog counter update should ideally happen in one
+MongoDB transaction.
+
+
+8. REPORTS AND ADMINISTRATION
+=============================
+
+Purpose:
+- Users report inappropriate content.
+- The single admin reviews and moderates reports.
+
+Normal user:
+POST /api/reports
+
+Admin:
+GET    /api/admin/reports
+PUT    /api/admin/reports/:id
+DELETE /api/admin/blogs/:id
+DELETE /api/admin/comments/:id
+GET    /api/admin/users
+
+CREATE REPORT
+-------------
+POST /api/reports
+
+Example:
+{
+  "targetType": "blog",
+  "target": "BLOG_ID",
+  "reason": "spam",
+  "description": "This post contains spam."
+}
+
+Flow:
+Authentication
+ -> Validate targetType
+ -> Check target exists
+ -> Validate reason
+ -> Create Report
+ -> status = pending
+
+REPORT TARGETS
+--------------
+targetType = blog
+or
+targetType = comment
+
+REPORT STATUS
+-------------
+- pending
+- reviewed
+- resolved
+- rejected
+
+Typical flow:
+pending -> reviewed -> resolved/rejected
+
+A report being resolved does not automatically mean content must be deleted.
+The admin reviews the actual content and takes the appropriate moderation
+action.
+
+ADMIN DASHBOARD
+---------------
+Can show:
+- pending reports
+- reporter
+- reason
+- description
+- reported content
+- content author
+- status
+- date
+- moderation actions
+
+Possible actions:
+- View Content
+- Resolve
+- Reject
+- Delete Content
+
+ADMIN BLOG DELETION
+-------------------
+DELETE /api/admin/blogs/:id
+
+Authentication
+ -> Admin authorization
+ -> Find blog
+ -> Delete comments
+ -> Delete votes
+ -> Delete reports
+ -> Delete blog
+
+ADMIN COMMENT DELETION
+----------------------
+DELETE /api/admin/comments/:id
+
+Authentication
+ -> Admin authorization
+ -> Find comment
+ -> Delete/moderate
+ -> Update commentCount appropriately
+
+USER MANAGEMENT
+---------------
+GET /api/admin/users
+
+The admin can view registered users and take necessary moderation actions.
+
+Not required:
+- multiple admins
+- admin invitations
+- user promotion to admin
+- admin role management UI
+
+
+9. COMPLETE API SUMMARY
+=======================
+
+AUTH:
+POST /api/auth/register
+POST /api/auth/login
+POST /api/auth/logout
+
+USERS:
+GET  /api/users/me
+PUT  /api/users/me
+GET  /api/users/me/blogs
+
+BLOGS:
+GET    /api/blogs
+GET    /api/blogs/:id
+POST   /api/blogs
+PUT    /api/blogs/:id
+DELETE /api/blogs/:id
+POST   /api/blogs/:id/publish
+
+COMMENTS:
+GET    /api/blogs/:id/comments
+POST   /api/blogs/:id/comments
+PUT    /api/comments/:id
+DELETE /api/comments/:id
+POST   /api/comments/:id/replies
+
+VOTING:
+GET    /api/blogs/:id/vote
+POST   /api/blogs/:id/vote
+DELETE /api/blogs/:id/vote
+
+REPORTS:
+POST /api/reports
+
+ADMIN:
+GET    /api/admin/reports
+PUT    /api/admin/reports/:id
+DELETE /api/admin/blogs/:id
+DELETE /api/admin/comments/:id
+GET    /api/admin/users
+
+
+10. AUTHORIZATION SUMMARY
+=========================
+
+Operation                         User       Admin
+----------------------------------------------------
+Register                          Yes        No special need
+Login                             Yes        Yes
+Read published blogs             Yes        Yes
+Create blog                      Yes        Yes
+Edit own blog                    Yes        Yes
+Edit another user's blog         No         Not as author
+Delete own blog                  Yes        Yes
+Delete another user's blog       No         Yes, moderation
+Publish own blog                 Yes        Yes
+Read own draft                   Yes        Yes
+Read another user's draft        No         No
+Add comment                      Yes        Yes
+Edit own comment                 Yes        Yes
+Delete own comment               Yes        Yes
+Delete another user's comment    No         Yes, moderation
+Vote                              Yes        Yes
+Report content                   Yes        Yes
+View all reports                 No         Yes
+Review reports                   No         Yes
+View users                       No         Yes
+
+
+11. PROJECT STRUCTURE
+=====================
+
+bloggr/
+|
++-- client/
+|   +-- index.html
+|   +-- pages/
+|   +-- css/
+|   |   +-- style.css
+|   +-- js/
+|       +-- api.js
+|       +-- auth.js
+|       +-- blogs.js
+|       +-- comments.js
+|       +-- voting.js
+|       +-- admin.js
+|
++-- server/
+    +-- models/
+    |   +-- User.js
+    |   +-- Blog.js
+    |   +-- Comment.js
+    |   +-- Vote.js
+    |   +-- Report.js
+    |
+    +-- routes/
+    |   +-- authRoutes.js
+    |   +-- userRoutes.js
+    |   +-- blogRoutes.js
+    |   +-- commentRoutes.js
+    |   +-- voteRoutes.js
+    |   +-- reportRoutes.js
+    |   +-- adminRoutes.js
+    |
+    +-- controllers/
+    +-- services/
+    +-- middleware/
+    |   +-- auth.js
+    |   +-- admin.js
+    |   +-- validation.js
+    |   +-- errorHandler.js
+    +-- config/
+    +-- utils/
+    +-- server.js
+
+
+12. COMPLETE REQUEST EXAMPLES
+=============================
+
+READ BLOG:
+Browser
+ -> GET /api/blogs/123
+ -> Express Router
+ -> Blog Controller
+ -> Blog Service
+ -> Blog Model
+ -> MongoDB
+ -> JSON response
+ -> Frontend JavaScript
+ -> Display blog
+
+CREATE BLOG:
+Browser
+ -> POST /api/blogs
+ -> Authentication
+ -> Validation
+ -> Controller
+ -> Service
+ -> Model
+ -> MongoDB
+ -> Response
+
+UPVOTE:
+Browser
+ -> POST /api/blogs/123/vote
+ -> Authentication
+ -> Vote Controller
+ -> Vote Service
+ -> Find existing vote
+ -> Create/change vote
+ -> Update Blog counter
+ -> MongoDB
+
+REPORT:
+Browser
+ -> POST /api/reports
+ -> Authentication
+ -> Validate target
+ -> Report Controller
+ -> Report Service
+ -> MongoDB
+ -> status = pending
+
+ADMIN MODERATION:
+Admin Browser
+ -> GET /api/admin/reports
+ -> Authentication
+ -> Admin Authorization
+ -> Admin Controller
+ -> MongoDB
+ -> Reports
+
+
+13. IMPORTANT SYSTEM RULES
+==========================
+
+1. Exactly two roles: user and admin.
+2. Exactly one admin account.
+3. New registrations always receive role = user.
+4. Users cannot assign themselves admin.
+5. Authentication uses sessions.
+6. Passwords are hashed before storage.
+7. Users can modify only their own blogs/comments.
+8. Admin can moderate any blog/comment.
+9. Draft blogs are private to their author.
+10. Published blogs are publicly readable.
+11. Comments support only one level of replies.
+12. One active vote per user per blog.
+13. Unique (user, blog) index is required.
+14. Vote counts are cached on Blog.
+15. Comment count is cached on Blog.
+16. Reports can target blogs or comments.
+17. Reports start as pending.
+18. Admin endpoints require authentication + admin authorization.
+19. Blog deletion removes related comments, votes and reports.
+20. Browser never directly accesses MongoDB.
+21. Database access goes through backend + Mongoose.
+
+
+14. CURRENT DESIGN STATUS
+=========================
+
+Completed:
+- Overall architecture
+- Client-server architecture
+- Modular monolith
+- Layered backend
+- Five database collections
+- Database relationships
+- Single-admin model
+- Authentication
+- Session-based login/logout
+- Password hashing
+- Authentication middleware
+- Role-based authorization
+- Ownership authorization
+- Blog lifecycle
+- Draft/published states
+- Blog CRUD
+- Comments
+- One-level replies
+- Voting
+- Vote state transitions
+- Cached vote counters
+- Cached comment counter
+- Reports
+- Admin moderation
+- Blog deletion cascade
+
+Not yet finalized:
+- Exact behavior when deleting a parent comment with replies.
+- Detailed validation rules.
+- Detailed error handling.
+- Detailed security protections.
+- Exact frontend page/component design.
+- Exact Mongoose schema implementation.
+- Session storage configuration.
+- Deployment configuration.
+
+These should be designed before implementation so the implementation remains
+consistent with the system design.

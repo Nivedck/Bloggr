@@ -1,0 +1,878 @@
+============================================================
+BLOGGR — DETAILED SYSTEM DESIGN
+STAGE 3: SECURITY DESIGN
+============================================================
+
+The purpose of security design is to protect:
+
+    - User accounts
+    - Passwords
+    - Sessions
+    - Blogs and comments
+    - Voting system
+    - Reports
+    - Admin functionality
+    - Database
+    - Server/API
+
+
+------------------------------------------------------------
+1. PASSWORD SECURITY
+------------------------------------------------------------
+
+Passwords must NEVER be stored as plain text.
+
+Incorrect:
+
+    password = "mypassword123"
+
+Correct:
+
+    password = bcrypt_hash("mypassword123")
+
+
+When registering:
+
+    User enters password
+            ↓
+    Backend receives password
+            ↓
+    bcrypt hashes password
+            ↓
+    Hash stored in MongoDB
+
+
+When logging in:
+
+    User enters password
+            ↓
+    Backend retrieves stored hash
+            ↓
+    bcrypt compares entered password
+    with stored hash
+            ↓
+    Match?
+      ├── Yes → Login successful
+      └── No  → Login rejected
+
+
+The original password cannot be recovered from the stored hash.
+
+
+------------------------------------------------------------
+2. AUTHENTICATION
+------------------------------------------------------------
+
+Bloggr will use SESSION-BASED AUTHENTICATION.
+
+Authentication answers:
+
+    "Who is this user?"
+
+
+Login flow:
+
+    User enters email + password
+                ↓
+          POST /api/auth/login
+                ↓
+          Find user by email
+                ↓
+          Compare password using bcrypt
+                ↓
+            Password valid?
+              ├── No → 401
+              └── Yes
+                    ↓
+              Create session
+                    ↓
+              Store user identity
+                    ↓
+              Send session cookie
+                    ↓
+                 Browser
+
+
+After login, the browser automatically sends
+the session cookie with subsequent requests.
+
+Example:
+
+    GET /api/users/me
+
+    Browser
+       ↓
+    Session Cookie
+       ↓
+    Express
+       ↓
+    Session Middleware
+       ↓
+    Identify User
+       ↓
+    Continue request
+
+
+------------------------------------------------------------
+3. LOGOUT
+------------------------------------------------------------
+
+Logout should invalidate the user's session.
+
+Flow:
+
+    User clicks Logout
+            ↓
+    POST /api/auth/logout
+            ↓
+    Destroy/invalidate session
+            ↓
+    Clear session cookie
+            ↓
+    User is logged out
+
+
+After logout, a protected request such as:
+
+    POST /api/blogs
+
+should return:
+
+    401 Unauthorized
+
+
+------------------------------------------------------------
+4. SESSION SECURITY
+------------------------------------------------------------
+
+The authentication session will be represented using
+a secure cookie.
+
+Important cookie settings:
+
+    HttpOnly
+    Secure
+    SameSite
+
+
+HttpOnly:
+
+    JavaScript cannot directly access the session cookie.
+
+    This reduces the risk of malicious JavaScript
+    stealing the session cookie.
+
+
+Secure:
+
+    Cookie is sent only over HTTPS in production.
+
+
+SameSite:
+
+    Helps reduce cross-site request attacks.
+
+    Appropriate SameSite policy will be selected
+    according to the deployment architecture.
+
+
+Development:
+
+    Secure cookie settings may need adjustment when
+    running locally over HTTP.
+
+
+Production:
+
+    HTTPS should be used.
+
+
+------------------------------------------------------------
+5. AUTHENTICATION MIDDLEWARE
+------------------------------------------------------------
+
+Protected routes will use authentication middleware.
+
+Example concept:
+
+    Request
+       ↓
+    Authentication Middleware
+       ↓
+    Is valid session present?
+       │
+       ├── No → 401 Unauthorized
+       │
+       └── Yes
+             ↓
+         Controller
+
+
+Examples of protected operations:
+
+    POST   /api/blogs
+    PUT    /api/blogs/:id
+    DELETE /api/blogs/:id
+    POST   /api/blogs/:id/vote
+    POST   /api/blogs/:id/comments
+    POST   /api/reports
+    GET    /api/users/me
+
+
+Public operations can include:
+
+    POST /api/auth/register
+    POST /api/auth/login
+    GET  /api/blogs
+    GET  /api/blogs/search
+    GET  /api/blogs/:id
+
+
+------------------------------------------------------------
+6. AUTHORIZATION
+------------------------------------------------------------
+
+Authentication:
+
+    "Who are you?"
+
+
+Authorization:
+
+    "Are you allowed to perform this action?"
+
+
+Bloggr has two roles:
+
+    user
+    admin
+
+
+Normal User:
+
+    Can:
+        - Create blogs
+        - Edit own blogs
+        - Delete own blogs
+        - Comment
+        - Edit own comments
+        - Delete own comments
+        - Vote
+        - Report content
+        - Manage own profile
+
+
+Admin:
+
+    Can:
+        - Review reports
+        - Delete inappropriate blogs
+        - Delete inappropriate comments
+        - Manage users when necessary
+        - Perform moderation actions
+
+
+------------------------------------------------------------
+7. OWNERSHIP AUTHORIZATION
+------------------------------------------------------------
+
+Being logged in does NOT automatically mean
+the user can modify everything.
+
+Example:
+
+    User A owns Blog #10.
+
+    User B:
+        PUT /api/blogs/10
+
+The backend checks:
+
+    authenticated user ID
+            ↓
+    blog.author
+            ↓
+    Do they match?
+
+
+    Match:
+        → Allow
+
+
+    Don't match:
+        → 403 Forbidden
+
+
+The same principle applies to comments.
+
+
+------------------------------------------------------------
+8. ADMIN AUTHORIZATION
+------------------------------------------------------------
+
+Admin routes require both:
+
+    Authentication
+          +
+    Admin authorization
+
+
+Flow:
+
+    Request
+       ↓
+    Authentication Middleware
+       ↓
+    User logged in?
+       ├── No → 401
+       │
+       └── Yes
+             ↓
+       Admin Authorization Middleware
+             ↓
+       role === "admin"?
+          ├── No → 403
+          └── Yes
+                ↓
+             Continue
+
+
+Example:
+
+    GET /api/admin/reports
+
+
+Normal user:
+
+    → 403 Forbidden
+
+
+Admin:
+
+    → Request allowed
+
+
+------------------------------------------------------------
+9. ADMIN ROLE PROTECTION
+------------------------------------------------------------
+
+A normal user must not be able to change:
+
+    role = "user"
+
+into:
+
+    role = "admin"
+
+
+The client must never be allowed to freely modify
+the role field.
+
+For example, this request must not be trusted:
+
+    PUT /api/users/me
+
+    {
+        "name": "Nived",
+        "role": "admin"
+    }
+
+
+The backend must prevent ordinary users from modifying
+their role.
+
+
+------------------------------------------------------------
+10. INPUT SANITIZATION
+------------------------------------------------------------
+
+Bloggr accepts user-generated content:
+
+    - Blog titles
+    - Blog content
+    - Comments
+    - Bios
+    - Search queries
+
+
+This creates a risk of:
+
+    XSS
+    Cross-Site Scripting
+
+
+Example malicious content:
+
+    <script>
+        malicious code
+    </script>
+
+
+The application must ensure that user-generated content
+cannot execute arbitrary JavaScript in another user's browser.
+
+
+Important:
+
+    Validation
+       +
+    Sanitization
+       +
+    Safe output/rendering
+
+
+must be used.
+
+
+------------------------------------------------------------
+11. WYSIWYG BLOG EDITOR SECURITY
+------------------------------------------------------------
+
+Bloggr will use a WYSIWYG editor according to the syllabus.
+
+This means blog content may contain HTML.
+
+Therefore, we cannot simply allow every HTML tag and attribute.
+
+Potentially dangerous HTML such as:
+
+    <script>
+    javascript:
+    dangerous event handlers
+    malicious iframe/embed content
+
+
+must be removed or restricted.
+
+The backend should sanitize HTML before storing or
+rendering it.
+
+This is especially important because blog content
+is displayed to other users.
+
+
+------------------------------------------------------------
+12. MONGODB INJECTION PROTECTION
+------------------------------------------------------------
+
+User input must not be directly trusted when constructing
+MongoDB queries.
+
+For example:
+
+    Search input
+    Login input
+    IDs
+    Filters
+
+
+must be validated and safely handled.
+
+Bloggr should:
+
+    - Validate IDs
+    - Validate expected data types
+    - Restrict allowed query fields
+    - Avoid blindly accepting MongoDB operators
+    - Use Mongoose safely
+
+
+Example:
+
+    Expected:
+
+        email = "user@example.com"
+
+
+Do not blindly accept arbitrary MongoDB query objects
+from the client.
+
+
+------------------------------------------------------------
+13. CSRF PROTECTION
+------------------------------------------------------------
+
+Because Bloggr uses cookie-based sessions, CSRF
+protection must be considered.
+
+CSRF:
+
+    Cross-Site Request Forgery
+
+
+It occurs when another website attempts to make a user's
+browser perform an authenticated action using the user's
+existing session.
+
+
+Example:
+
+    User is logged into Bloggr.
+
+    User visits malicious-site.com.
+
+    Malicious site attempts:
+
+        POST /api/blogs/...
+
+    using the user's existing authentication context.
+
+
+Bloggr should use an appropriate CSRF protection mechanism
+for state-changing requests.
+
+State-changing operations include:
+
+    POST
+    PUT
+    DELETE
+
+
+GET requests should not perform state-changing operations.
+
+
+------------------------------------------------------------
+14. CORS
+------------------------------------------------------------
+
+CORS:
+
+    Cross-Origin Resource Sharing
+
+
+CORS controls which origins are allowed to communicate
+with the Bloggr API.
+
+During development, the frontend and backend may run
+on different ports.
+
+Example:
+
+    Frontend:
+        localhost:3000
+
+    Backend:
+        localhost:5000
+
+
+The backend can explicitly allow the frontend origin.
+
+
+In production:
+
+    Only trusted origins should be allowed.
+
+
+Do NOT use unrestricted:
+
+    Access-Control-Allow-Origin: *
+
+
+when credentialed session cookies are being used.
+
+
+------------------------------------------------------------
+15. RATE LIMITING
+------------------------------------------------------------
+
+Some endpoints should have rate limiting to reduce abuse.
+
+Especially:
+
+    - Login
+    - Registration
+    - Reports
+    - Voting
+    - Comments
+
+
+Example:
+
+    A client repeatedly attempts login:
+
+        1000 requests
+        ↓
+        Server
+
+
+Rate limiting can temporarily block excessive requests.
+
+
+This helps reduce:
+
+    - Brute-force login attempts
+    - Spam
+    - API abuse
+
+
+------------------------------------------------------------
+16. SENSITIVE DATA PROTECTION
+------------------------------------------------------------
+
+The API should never return sensitive information unnecessarily.
+
+User response should NOT expose:
+
+    password hash
+    session information
+    internal security information
+
+
+Example:
+
+    Database document:
+
+    {
+        name: "Nived",
+        email: "...",
+        password: "$2b$10$...",
+        role: "user"
+    }
+
+
+API response:
+
+    {
+        name: "Nived",
+        email: "...",
+        role: "user"
+    }
+
+
+The password hash should not be sent to the browser.
+
+
+------------------------------------------------------------
+17. ERROR INFORMATION PROTECTION
+------------------------------------------------------------
+
+Security-related internal information must not be exposed.
+
+Do NOT return:
+
+    Database connection strings
+    Password hashes
+    Stack traces
+    Internal file paths
+    Environment variables
+    Secret keys
+
+
+Instead:
+
+    {
+        "success": false,
+        "message": "Internal server error"
+    }
+
+
+Detailed information should be recorded in
+server-side logs where appropriate.
+
+
+------------------------------------------------------------
+18. ENVIRONMENT VARIABLES
+------------------------------------------------------------
+
+Sensitive configuration should not be hardcoded
+directly into source code.
+
+Examples:
+
+    MongoDB connection string
+    Session secret
+    API keys
+    Production configuration
+
+
+These should be stored using environment variables.
+
+Example concept:
+
+    process.env.MONGO_URI
+    process.env.SESSION_SECRET
+
+
+The .env file must NOT be committed to Git.
+
+
+------------------------------------------------------------
+19. PASSWORD / SECRET STORAGE RULE
+------------------------------------------------------------
+
+Never commit secrets into Git.
+
+Do NOT write:
+
+    MONGO_URI = "mongodb+srv://..."
+    SESSION_SECRET = "my-secret"
+
+
+directly into source code.
+
+
+Instead:
+
+    .env
+       ↓
+    Environment variables
+       ↓
+    Application
+
+
+And:
+
+    .env
+       ↓
+    .gitignore
+
+
+------------------------------------------------------------
+20. HTTPS
+------------------------------------------------------------
+
+Production Bloggr should use HTTPS.
+
+Without HTTPS, network traffic can potentially be
+intercepted.
+
+HTTPS protects:
+
+    - Login credentials during transmission
+    - Session cookies
+    - Blog/comment requests
+    - Other API communication
+
+
+Development may use:
+
+    http://localhost
+
+
+Production should use:
+
+    https://...
+
+
+------------------------------------------------------------
+21. SECURITY LAYERS
+------------------------------------------------------------
+
+Overall Bloggr security:
+
+                     USER
+                       │
+                       ▼
+                    HTTPS
+                       │
+                       ▼
+                 Express Server
+                       │
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+   Authentication  Authorization  Validation
+          │            │            │
+          └────────────┼────────────┘
+                       ▼
+                  Sanitization
+                       │
+                       ▼
+                    Service
+                       │
+                       ▼
+                   Mongoose
+                       │
+                       ▼
+                   MongoDB
+
+
+------------------------------------------------------------
+22. SECURITY DESIGN PRINCIPLES
+------------------------------------------------------------
+
+Bloggr follows these principles:
+
+    1. Never store plaintext passwords.
+
+    2. Never trust client-supplied data.
+
+    3. Authenticate protected requests.
+
+    4. Authorize every privileged operation.
+
+    5. Verify resource ownership.
+
+    6. Protect admin functionality.
+
+    7. Sanitize user-generated HTML.
+
+    8. Protect against XSS.
+
+    9. Protect against MongoDB injection.
+
+   10. Use CSRF protection for cookie-authenticated
+       state-changing requests.
+
+   11. Restrict CORS to trusted origins.
+
+   12. Rate-limit sensitive endpoints.
+
+   13. Protect session cookies.
+
+   14. Keep secrets in environment variables.
+
+   15. Never expose password hashes or internal errors.
+
+   16. Use HTTPS in production.
+
+
+============================================================
+SECURITY DESIGN COMPLETE
+============================================================
+
+Authentication answers:
+
+    WHO ARE YOU?
+
+Authorization answers:
+
+    WHAT ARE YOU ALLOWED TO DO?
+
+Validation answers:
+
+    IS THIS DATA ACCEPTABLE?
+
+Sanitization answers:
+
+    IS THIS USER-GENERATED CONTENT SAFE?
+
+Error handling answers:
+
+    HOW SHOULD THE SYSTEM RESPOND WHEN SOMETHING FAILS?
+
+
+Next Stage:
+
+    STAGE 4 — DETAILED DATABASE / MONGOOSE DESIGN
+
+We will convert our conceptual database design into
+actual Mongoose schema design.
+
+Topics:
+
+    - ObjectId
+    - Mongoose Schema
+    - Mongoose Model
+    - References
+    - populate()
+    - Validation rules
+    - Indexes
+    - Unique constraints
+    - Timestamps
+    - Vote uniqueness
+    - Blog search/indexing
+    - Comment relationships
+    - Report polymorphic references
+    - Cascade deletion
+    - Transactions
+============================================================

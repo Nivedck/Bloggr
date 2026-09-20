@@ -1,0 +1,1847 @@
+BLOGGR — FINAL SYSTEM DESIGN & API ↔ UI INTEGRATION MAP
+========================================================
+
+1. PROJECT OVERVIEW
+-------------------
+
+Project Name:
+Bloggr
+
+Purpose:
+A web-based blogging platform for a college community where students
+and teachers can publish, discover, read, and interact with articles.
+
+User Roles:
+- user
+- admin
+
+There is exactly one admin account.
+
+Technology Stack:
+- Frontend: HTML + CSS + Vanilla JavaScript
+- Backend: Node.js + Express.js
+- Database: MongoDB
+- ODM: Mongoose
+- Authentication: Session-based authentication
+- Password Security: bcrypt
+
+
+2. HIGH-LEVEL ARCHITECTURE
+--------------------------
+
+Browser
+   |
+   | HTTP/HTTPS + JSON
+   v
+Node.js + Express.js
+   |
+   +-- Authentication & Users
+   +-- Blog Management
+   +-- Comments
+   +-- Voting
+   +-- Reports & Administration
+   |
+   v
+Mongoose
+   |
+   v
+MongoDB
+
+
+3. BACKEND LAYERED ARCHITECTURE
+--------------------------------
+
+Request
+   |
+   v
+Routes
+   |
+   v
+Middleware
+   |
+   v
+Controller
+   |
+   v
+Service
+   |
+   v
+Mongoose Model
+   |
+   v
+MongoDB
+
+
+Responsibilities:
+
+Routes:
+- Define URLs and HTTP methods
+- Direct requests to controllers
+
+Middleware:
+- Authentication
+- Authorization
+- Validation
+- CSRF protection
+- Rate limiting
+- Error handling
+
+Controllers:
+- Handle HTTP requests/responses
+- Receive request data
+- Call services
+- Return JSON responses
+
+Services:
+- Contain application/business logic
+- Perform operations involving multiple models
+- Handle voting logic, cascade deletion, authorization-related
+  business rules, etc.
+
+Models:
+- Define Mongoose schemas
+- Define validation
+- Define references
+- Define indexes
+- Communicate with MongoDB
+
+
+4. DATABASE COLLECTIONS
+-----------------------
+
+users
+------
+_id
+name
+email
+password
+bio
+role
+createdAt
+updatedAt
+
+Constraints:
+- email must be unique
+- password is hashed
+- role = user | admin
+- new registrations always receive role = user
+- users cannot change their own role
+
+
+blogs
+-----
+_id
+title
+content
+author
+status
+tags[]
+upvoteCount
+downvoteCount
+commentCount
+createdAt
+updatedAt
+
+Constraints:
+- author references User
+- status = draft | published
+- tags are stored as an embedded array
+- vote/comment counts are cached on Blog
+- actual votes/comments are stored separately
+
+
+comments
+--------
+_id
+blog
+author
+content
+parentComment
+createdAt
+updatedAt
+
+Constraints:
+- blog references Blog
+- author references User
+- parentComment references Comment or null
+- only single-level replies are allowed
+
+
+votes
+-----
+_id
+user
+blog
+type
+createdAt
+
+Constraints:
+- user references User
+- blog references Blog
+- type = upvote | downvote
+- one active vote per user per blog
+- unique compound index on (user, blog)
+
+
+reports
+-------
+_id
+reporter
+targetType
+target
+reason
+description
+status
+createdAt
+updatedAt
+
+Constraints:
+- reporter references User
+- targetType = blog | comment
+- target references Blog or Comment
+- reason = spam | harassment | hate | misinformation |
+           inappropriate | other
+- status = pending | reviewed | resolved | rejected
+- backend verifies that target exists and matches targetType
+
+
+5. DATABASE RELATIONSHIPS
+-------------------------
+
+1 User  -> N Blogs
+1 User  -> N Comments
+1 User  -> N Votes
+1 User  -> N Reports
+
+1 Blog  -> N Comments
+1 Blog  -> N Votes
+1 Blog  -> N Reports
+
+1 Comment -> N Replies
+           (single level only)
+
+User <-> Blog
+Many-to-many relationship through Vote.
+
+
+6. DATABASE INDEXES
+-------------------
+
+users:
+- unique index on email
+
+blogs:
+- index for published blogs + createdAt
+- text index on title, content and tags
+
+comments:
+- index on blog
+- optionally createdAt for ordering/pagination
+
+votes:
+- unique compound index on user + blog
+
+reports:
+- index on status
+- optionally compound index on targetType + target
+
+
+7. BLOG DELETION / CASCADE
+--------------------------
+
+When a blog is deleted:
+
+Delete associated comments
+Delete associated votes
+Delete reports targeting the blog
+Delete the blog
+
+Preferred implementation:
+
+Admin/User authorized to delete
+        |
+        v
+Database transaction
+        |
+        +-- Delete comments
+        +-- Delete votes
+        +-- Delete reports
+        +-- Delete blog
+        |
+        v
+Commit transaction
+
+
+8. FRONTEND ARCHITECTURE
+------------------------
+
+HTML
+  |
+  v
+CSS
+  |
+  v
+Vanilla JavaScript
+  |
+  v
+Fetch API
+  |
+  v
+Express REST API
+  |
+  v
+Backend
+
+
+Frontend principles:
+- Simple
+- Classic
+- Modern
+- Editorial/blog-oriented
+- Minimal animations
+- No excessive gradients
+- No glassmorphism
+- No unnecessary UI elements
+- Responsive design
+- Mobile and desktop support
+
+
+9. FRONTEND PAGES
+-----------------
+
+Public Pages:
+- Home
+- Explore/Search
+- Blog Details
+- Login
+- Register
+
+Authenticated User Pages:
+- Write Blog
+- Edit Blog
+- Profile
+- My Blogs
+
+Admin:
+- Admin Dashboard
+
+
+10. MAIN FRONTEND COMPONENTS
+----------------------------
+
+Global Components:
+- Header
+- Footer
+- Toast notification
+- Loading indicator
+- Confirmation dialog
+
+Content Components:
+- Blog Card
+- Blog List
+- Comment
+- Reply
+- Vote Controls
+- Tag
+
+Form Components:
+- Input
+- Textarea
+- Search Bar
+- Blog Editor
+- Buttons
+
+
+11. HEADER
+----------
+
+Logged Out:
+
+Bloggr     Home   Explore                 Login   Register
+
+
+Logged In:
+
+Bloggr     Home   Explore   Write              User ▾
+
+User dropdown:
+- Profile
+- My Blogs
+- Logout
+
+Admin dropdown may additionally contain:
+- Admin
+
+
+12. HOMEPAGE
+------------
+
+Purpose:
+Display recently published blogs.
+
+Structure:
+
+Bloggr
+
+Ideas worth sharing.
+
+Search articles...
+
+Latest Articles
+
+[Blog Card]
+[Blog Card]
+[Blog Card]
+[Blog Card]
+
+Pagination
+
+
+Homepage API:
+
+GET /api/blogs?page=1&limit=10
+
+
+13. BLOG CARD
+-------------
+
+Each Blog Card contains:
+
+- Title
+- Short content preview
+- Tags
+- Author
+- Date
+- Upvote count
+- Downvote count
+- Comment count
+
+Example:
+
+----------------------------------------
+Understanding Machine Learning
+
+A short introduction to machine learning...
+
+machine-learning   python
+
+Nived C K · Sep 18, 2026
+
+↑ 24    ↓ 2    Comments 8
+----------------------------------------
+
+
+14. EXPLORE / SEARCH
+--------------------
+
+Search bar:
+
+Search articles...
+
+Search is an additional discovery feature.
+
+Search fields:
+- title
+- content
+- tags
+
+API:
+
+GET /api/blogs/search?q=python&page=1&limit=10
+
+
+15. BLOG DETAILS
+----------------
+
+Displays:
+
+- Blog title
+- Author
+- Date
+- Tags
+- Content
+- Upvote count
+- Downvote count
+- Comment count
+- Comments
+- Report option
+
+API:
+
+GET /api/blogs/:id
+
+
+16. VOTING UI
+-------------
+
+Simple controls:
+
+↑ 24    ↓ 2
+
+User can:
+
+- Upvote
+- Downvote
+- Remove their vote
+- Switch between upvote/downvote
+
+Frontend sends:
+
+POST /api/blogs/:id/vote
+
+Body:
+
+{
+    "type": "upvote"
+}
+
+The UI updates the vote count without reloading the page.
+
+
+17. COMMENTS UI
+---------------
+
+Example:
+
+Nived C K
+This is a useful explanation.
+
+Reply
+
+    Anu
+    I agree.
+
+    Reply
+
+
+Rules:
+- Users can add comments
+- Users can reply
+- Replies are single-level
+- Users can edit their own comments
+- Users can delete their own comments
+- Admin can delete comments
+
+
+18. LOGIN
+---------
+
+Email
+[____________________]
+
+Password
+[____________________]
+
+[ Login ]
+
+Don't have an account?
+Register
+
+
+19. REGISTER
+------------
+
+Name
+[____________________]
+
+Email
+[____________________]
+
+Password
+[____________________]
+
+Confirm Password
+[____________________]
+
+[ Register ]
+
+Already have an account?
+Login
+
+
+20. WRITE BLOG
+--------------
+
+Title
+[________________________________________]
+
+Tags
+[________________________________________]
+
+Content
+[________________________________________]
+[                                        ]
+[                                        ]
+[________________________________________]
+
+[Save Draft]    [Publish]
+
+
+21. EDIT BLOG
+-------------
+
+Same form as Write Blog.
+
+Title
+[ Existing title ]
+
+Tags
+[ Existing tags ]
+
+Content
+[ Existing content ]
+
+[Save Changes]
+
+
+22. USER PROFILE
+----------------
+
+Profile:
+
+Name
+Email
+Bio
+
+[Edit Profile]
+
+
+My Blogs:
+
+----------------------------------------
+Understanding Machine Learning
+Published · Sep 18
+
+Edit    Delete
+----------------------------------------
+
+----------------------------------------
+My First Blog
+Draft · Sep 12
+
+Edit    Delete
+----------------------------------------
+
+
+23. ADMIN DASHBOARD
+-------------------
+
+Reports:
+
+----------------------------------------
+Report #102
+
+Blog: Introduction to AI
+Reason: Spam
+Reported by: User123
+Status: Pending
+
+[View Content] [Resolve] [Reject]
+----------------------------------------
+
+
+Users:
+
+Name       Email              Role
+-----------------------------------
+Nived      ...                admin
+Anu        ...                user
+Rahul      ...                user
+
+
+Admin actions:
+- Review reports
+- Resolve/reject reports
+- Delete inappropriate blogs
+- Delete inappropriate comments
+- View/manage users
+
+
+24. LOADING STATE
+-----------------
+
+Loading articles...
+
+
+Keep loading UI simple.
+
+
+25. EMPTY STATES
+----------------
+
+No search results:
+
+No articles found.
+
+Try another search.
+
+
+No blogs:
+
+You haven't written any blogs yet.
+
+[Write your first blog]
+
+
+26. ERROR STATE
+---------------
+
+Something went wrong.
+
+We couldn't load the articles.
+
+[Try Again]
+
+
+Do not expose:
+- stack traces
+- MongoDB errors
+- internal paths
+- server secrets
+
+
+27. TOAST NOTIFICATIONS
+-----------------------
+
+Examples:
+
+Blog published successfully.
+
+Draft saved.
+
+Blog deleted successfully.
+
+Comment added successfully.
+
+Report submitted successfully.
+
+
+28. CONFIRMATION DIALOG
+-----------------------
+
+Delete Blog?
+
+Are you sure you want to delete this blog?
+
+This action cannot be undone.
+
+[Cancel]    [Delete]
+
+
+Use confirmation dialogs for destructive actions.
+
+
+29. FRONTEND ACCESS CONTROL
+---------------------------
+
+Page                 Guest    User    Admin
+------------------------------------------------
+Home                   ✓       ✓       ✓
+Explore                ✓       ✓       ✓
+Blog                   ✓       ✓       ✓
+Login                  ✓       -       -
+Register               ✓       -       -
+Write                  -       ✓       ✓
+Profile                -       ✓       ✓
+Admin                  -       -       ✓
+
+
+Important:
+
+Frontend hiding a button is NOT security.
+
+Backend must always verify:
+- authentication
+- ownership
+- admin role
+- permissions
+
+
+30. NAVIGATION
+-------------
+
+Logo:
+Bloggr -> /
+
+Home:
+Home -> /
+
+Explore:
+Explore -> /explore
+
+Write:
+Write -> /write
+
+If logged out:
+Write -> Login
+
+Blog:
+Blog Card -> /blog.html?id=:id
+
+Profile:
+Profile -> /profile
+
+My Blogs:
+My Blogs -> /profile#blogs
+
+Admin:
+Admin -> /admin
+
+Logout:
+Logout -> /
+and destroy session
+
+
+31. FRONTEND FILE STRUCTURE
+---------------------------
+
+client/
+|
+├── index.html
+|
+├── pages/
+│   ├── login.html
+│   ├── register.html
+│   ├── blog.html
+│   ├── write.html
+│   ├── edit-blog.html
+│   ├── profile.html
+│   ├── explore.html
+│   └── admin.html
+|
+├── css/
+│   ├── style.css
+│   ├── components.css
+│   └── responsive.css
+|
+└── js/
+    ├── api.js
+    ├── auth.js
+    ├── home.js
+    ├── blog.js
+    ├── editor.js
+    ├── comments.js
+    ├── voting.js
+    ├── profile.js
+    └── admin.js
+
+
+32. BACKEND FILE STRUCTURE
+---------------------------
+
+server/
+|
+├── config/
+│   └── database.js
+|
+├── models/
+│   ├── User.js
+│   ├── Blog.js
+│   ├── Comment.js
+│   ├── Vote.js
+│   └── Report.js
+|
+├── routes/
+│   ├── authRoutes.js
+│   ├── userRoutes.js
+│   ├── blogRoutes.js
+│   ├── commentRoutes.js
+│   ├── voteRoutes.js
+│   └── adminRoutes.js
+|
+├── controllers/
+│   ├── authController.js
+│   ├── userController.js
+│   ├── blogController.js
+│   ├── commentController.js
+│   ├── voteController.js
+│   └── adminController.js
+|
+├── services/
+│   ├── authService.js
+│   ├── userService.js
+│   ├── blogService.js
+│   ├── commentService.js
+│   ├── voteService.js
+│   └── reportService.js
+|
+├── middleware/
+│   ├── auth.js
+│   ├── admin.js
+│   ├── validation.js
+│   └── errorHandler.js
+|
+├── utils/
+│   └── ...
+|
+├── app.js
+└── server.js
+
+
+33. API ENDPOINTS
+-----------------
+
+AUTHENTICATION:
+
+POST   /api/auth/register
+POST   /api/auth/login
+POST   /api/auth/logout
+
+
+USERS:
+
+GET    /api/users/me
+PUT    /api/users/me
+GET    /api/users/me/blogs
+
+
+BLOGS:
+
+GET    /api/blogs
+GET    /api/blogs/search
+GET    /api/blogs/:id
+POST   /api/blogs
+PUT    /api/blogs/:id
+DELETE /api/blogs/:id
+POST   /api/blogs/:id/publish
+
+
+COMMENTS:
+
+GET    /api/blogs/:id/comments
+POST   /api/blogs/:id/comments
+PUT    /api/comments/:id
+DELETE /api/comments/:id
+POST   /api/comments/:id/replies
+
+
+VOTES:
+
+GET    /api/blogs/:id/vote
+POST   /api/blogs/:id/vote
+DELETE /api/blogs/:id/vote
+
+
+REPORTS:
+
+POST   /api/reports
+
+
+ADMIN:
+
+GET    /api/admin/reports
+PUT    /api/admin/reports/:id
+DELETE /api/admin/blogs/:id
+DELETE /api/admin/comments/:id
+GET    /api/admin/users
+
+
+34. API ↔ UI INTEGRATION MAP
+----------------------------
+
+REGISTER
+--------
+
+Register Form
+   ↓
+POST /api/auth/register
+   ↓
+authRoutes
+   ↓
+validation middleware
+   ↓
+authController
+   ↓
+authService
+   ↓
+User Model
+   ↓
+MongoDB users
+   ↓
+201 Created
+   ↓
+Frontend
+   ↓
+Redirect to Login
+
+
+LOGIN
+-----
+
+Login Form
+   ↓
+POST /api/auth/login
+   ↓
+Authentication validation
+   ↓
+authController
+   ↓
+authService
+   ↓
+Find User
+   ↓
+bcrypt password comparison
+   ↓
+Create session
+   ↓
+Response
+   ↓
+Redirect to Home
+
+
+LOGOUT
+------
+
+Logout button
+   ↓
+POST /api/auth/logout
+   ↓
+Authentication middleware
+   ↓
+Destroy session
+   ↓
+Response
+   ↓
+Redirect to Home
+
+
+CURRENT USER
+------------
+
+Page loads
+   ↓
+GET /api/users/me
+   ↓
+Authentication middleware
+   ↓
+User controller
+   ↓
+User service
+   ↓
+User model
+   ↓
+MongoDB
+   ↓
+JSON response
+   ↓
+Update UI
+
+
+HOMEPAGE
+--------
+
+Home page loads
+   ↓
+home.js
+   ↓
+GET /api/blogs?page=1&limit=10
+   ↓
+blogController
+   ↓
+blogService
+   ↓
+Blog Model
+   ↓
+MongoDB
+   ↓
+Published blogs
+   ↓
+JSON
+   ↓
+home.js
+   ↓
+Create Blog Cards
+   ↓
+DOM
+
+
+SEARCH
+------
+
+Search input
+   ↓
+User submits search
+   ↓
+GET /api/blogs/search?q=python&page=1&limit=10
+   ↓
+blogController
+   ↓
+blogService
+   ↓
+Blog Model
+   ↓
+MongoDB text search
+   ↓
+JSON
+   ↓
+Render search results
+
+
+OPEN BLOG
+---------
+
+Click Blog Card
+   ↓
+/blog.html?id=:id
+   ↓
+blog.js
+   ↓
+GET /api/blogs/:id
+   ↓
+blogController
+   ↓
+blogService
+   ↓
+Blog Model
+   ↓
+MongoDB
+   ↓
+Blog data
+   ↓
+Render article
+
+
+CREATE BLOG
+-----------
+
+Write Blog form
+   ↓
+POST /api/blogs
+   ↓
+Authentication middleware
+   ↓
+Validation middleware
+   ↓
+blogController
+   ↓
+blogService
+   ↓
+Server determines:
+   - author
+   - status
+   - vote counts
+   - comment count
+   ↓
+Blog Model
+   ↓
+MongoDB
+   ↓
+201 Created
+   ↓
+Toast
+   ↓
+Redirect to blog
+
+
+SAVE DRAFT
+----------
+
+Write Blog
+   ↓
+Save Draft
+   ↓
+POST /api/blogs
+   ↓
+status = draft
+   ↓
+Blog Model
+   ↓
+MongoDB
+   ↓
+Success
+
+
+EDIT BLOG
+---------
+
+Edit button
+   ↓
+Load blog
+   ↓
+PUT /api/blogs/:id
+   ↓
+Authentication
+   ↓
+Find blog
+   ↓
+Check ownership
+   ↓
+Validate
+   ↓
+blogService
+   ↓
+Blog Model
+   ↓
+MongoDB
+   ↓
+Success
+   ↓
+Update UI
+
+
+DELETE BLOG
+-----------
+
+Delete button
+   ↓
+Confirmation dialog
+   ↓
+DELETE /api/blogs/:id
+   ↓
+Authentication
+   ↓
+Find blog
+   ↓
+Check ownership OR admin
+   ↓
+Transaction
+   ├── Delete comments
+   ├── Delete votes
+   ├── Delete related reports
+   └── Delete blog
+   ↓
+Commit
+   ↓
+Response
+   ↓
+Redirect to My Blogs
+
+
+LOAD COMMENTS
+-------------
+
+Blog page loads
+   ↓
+GET /api/blogs/:id/comments
+   ↓
+commentController
+   ↓
+commentService
+   ↓
+Comment Model
+   ↓
+MongoDB
+   ↓
+JSON
+   ↓
+Render comments
+
+
+ADD COMMENT
+-----------
+
+Comment form
+   ↓
+POST /api/blogs/:id/comments
+   ↓
+Authentication
+   ↓
+Validation
+   ↓
+commentController
+   ↓
+commentService
+   ↓
+Server determines:
+   - author
+   - blog
+   - parentComment = null
+   ↓
+Create Comment
+   ↓
+Increment Blog.commentCount
+   ↓
+MongoDB
+   ↓
+JSON
+   ↓
+Update UI
+
+
+REPLY
+-----
+
+Reply button
+   ↓
+Reply form
+   ↓
+POST /api/comments/:id/replies
+   ↓
+Authentication
+   ↓
+Validation
+   ↓
+Check parent comment
+   ↓
+Check parent belongs to same blog
+   ↓
+Check parent is not already a reply
+   ↓
+Create reply
+   ↓
+Increment Blog.commentCount
+   ↓
+MongoDB
+   ↓
+Update UI
+
+
+EDIT COMMENT
+------------
+
+Edit comment
+   ↓
+PUT /api/comments/:id
+   ↓
+Authentication
+   ↓
+Find comment
+   ↓
+Check ownership
+   ↓
+Validate
+   ↓
+Update Comment
+   ↓
+MongoDB
+   ↓
+Update UI
+
+
+DELETE COMMENT
+--------------
+
+Delete button
+   ↓
+Confirmation
+   ↓
+DELETE /api/comments/:id
+   ↓
+Authentication
+   ↓
+Check ownership
+   ↓
+Delete Comment
+   ↓
+Update Blog.commentCount
+   ↓
+MongoDB
+   ↓
+Update UI
+
+
+VOTE
+----
+
+User clicks Upvote/Downvote
+   ↓
+POST /api/blogs/:id/vote
+   ↓
+Authentication
+   ↓
+Validate vote type
+   ↓
+Check Blog
+   ↓
+Find existing Vote(user, blog)
+   ↓
+Determine action:
+
+No existing vote
+   → Create vote
+   → Update count
+
+Same vote
+   → Remove vote
+   → Decrease count
+
+Opposite vote
+   → Change vote
+   → Update both counts
+
+   ↓
+Transaction
+   ↓
+MongoDB
+   ↓
+JSON response
+   ↓
+Update vote UI
+
+
+GET CURRENT VOTE
+----------------
+
+Blog page loads
+   ↓
+GET /api/blogs/:id/vote
+   ↓
+Authentication
+   ↓
+Find Vote(user, blog)
+   ↓
+Return:
+   upvote
+   downvote
+   null
+   ↓
+Frontend updates selected state
+
+
+REPORT
+------
+
+User clicks Report
+   ↓
+Report dialog
+   ↓
+Select reason
+   ↓
+Enter optional description
+   ↓
+POST /api/reports
+   ↓
+Authentication
+   ↓
+Validate target
+   ↓
+Server determines:
+   - reporter
+   - status = pending
+   ↓
+Report Model
+   ↓
+MongoDB
+   ↓
+Success
+   ↓
+Toast
+
+
+ADMIN REPORTS
+-------------
+
+Admin Dashboard
+   ↓
+GET /api/admin/reports
+   ↓
+Authentication
+   ↓
+Admin authorization
+   ↓
+Report controller/service
+   ↓
+Report Model
+   ↓
+MongoDB
+   ↓
+Return reports
+   ↓
+Render admin UI
+
+
+UPDATE REPORT
+-------------
+
+Admin selects:
+Resolve / Reject / Review
+   ↓
+PUT /api/admin/reports/:id
+   ↓
+Authentication
+   ↓
+Admin authorization
+   ↓
+Validate status
+   ↓
+Update Report
+   ↓
+MongoDB
+   ↓
+Update UI
+
+
+ADMIN DELETE BLOG
+-----------------
+
+Admin clicks Delete
+   ↓
+Confirmation
+   ↓
+DELETE /api/admin/blogs/:id
+   ↓
+Authentication
+   ↓
+Admin authorization
+   ↓
+Blog service
+   ↓
+Transaction
+   ├── Comments
+   ├── Votes
+   ├── Reports
+   └── Blog
+   ↓
+Commit
+   ↓
+Response
+   ↓
+Update Admin UI
+
+
+ADMIN DELETE COMMENT
+--------------------
+
+Admin clicks Delete
+   ↓
+Confirmation
+   ↓
+DELETE /api/admin/comments/:id
+   ↓
+Authentication
+   ↓
+Admin authorization
+   ↓
+Comment service
+   ↓
+Delete Comment
+   ↓
+Update Blog.commentCount
+   ↓
+MongoDB
+   ↓
+Update UI
+
+
+PROFILE UPDATE
+--------------
+
+Edit Profile
+   ↓
+PUT /api/users/me
+   ↓
+Authentication
+   ↓
+Validate
+   ↓
+User service
+   ↓
+Update allowed fields:
+   - name
+   - bio
+   ↓
+MongoDB
+   ↓
+Success
+   ↓
+Update UI
+
+
+MY BLOGS
+--------
+
+My Blogs page
+   ↓
+GET /api/users/me/blogs
+   ↓
+Authentication
+   ↓
+User/Blog service
+   ↓
+Blog Model
+   ↓
+MongoDB
+   ↓
+Return user's blogs
+   ↓
+Render published + draft blogs
+
+
+35. STANDARD API RESPONSE
+-------------------------
+
+Success:
+
+{
+    "success": true,
+    "message": "...",
+    "data": {}
+}
+
+
+Error:
+
+{
+    "success": false,
+    "message": "..."
+}
+
+
+Validation Error:
+
+{
+    "success": false,
+    "message": "Validation failed",
+    "errors": {
+        "title": "Title is required"
+    }
+}
+
+
+36. HTTP STATUS CODES
+---------------------
+
+200  OK
+201  Created
+204  No Content
+400  Bad Request
+401  Unauthorized
+403  Forbidden
+404  Not Found
+409  Conflict
+422  Validation Error
+500  Internal Server Error
+
+
+401:
+User is not authenticated.
+
+403:
+User is authenticated but does not have permission.
+
+404:
+Requested resource/route does not exist.
+
+409:
+Conflict such as duplicate email.
+
+422:
+Input failed validation.
+
+500:
+Unexpected server-side error.
+
+
+37. VALIDATION PRINCIPLE
+------------------------
+
+Frontend validation:
+- Improves user experience
+
+Backend validation:
+- Protects application
+
+Mongoose validation:
+- Protects database integrity
+
+Never trust frontend input.
+
+
+38. SECURITY DESIGN
+-------------------
+
+Authentication:
+- Session-based authentication
+- Secure cookies
+
+Password:
+- bcrypt hashing
+- Never store plaintext passwords
+
+Authorization:
+- Ownership checks
+- Admin role checks
+
+Cookies:
+- HttpOnly
+- Secure in production
+- SameSite
+
+Content:
+- Sanitize user-generated HTML
+- Prevent XSS
+
+MongoDB:
+- Validate ObjectIds
+- Validate input types
+- Restrict query fields/operators
+
+CSRF:
+- Protect state-changing requests
+
+Rate limiting:
+- Login
+- Registration
+- Reports
+- Voting
+- Comments
+
+Environment:
+- Secrets stored in .env
+- .env excluded from Git
+
+Production:
+- HTTPS
+
+
+39. COMPLETE IMPLEMENTATION FLOW
+--------------------------------
+
+PHASE 1 — PROJECT FOUNDATION
+- Create Git repository
+- Initialize Node.js project
+- Install Express
+- Install Mongoose
+- Install required dependencies
+- Create project structure
+- Configure environment variables
+- Connect MongoDB
+
+
+PHASE 2 — DATABASE
+- Create User schema
+- Create Blog schema
+- Create Comment schema
+- Create Vote schema
+- Create Report schema
+- Add validation
+- Add references
+- Add indexes
+
+
+PHASE 3 — BACKEND FOUNDATION
+- Create Express app
+- Create app.js
+- Create server.js
+- Configure middleware
+- Configure routes
+- Create standard response format
+- Create global error handler
+
+
+PHASE 4 — AUTHENTICATION
+- Register
+- bcrypt password hashing
+- Login
+- Session creation
+- Logout
+- Authentication middleware
+- Current-user endpoint
+
+
+PHASE 5 — BLOG SYSTEM
+- Create blog
+- Save draft
+- Publish blog
+- Get published blogs
+- Get individual blog
+- Edit blog
+- Delete blog
+- Ownership authorization
+- Search
+- Pagination
+
+
+PHASE 6 — COMMENTS & VOTING
+- Add comments
+- Replies
+- Edit comments
+- Delete comments
+- Comment counts
+- Upvotes
+- Downvotes
+- Vote switching
+- Vote removal
+- Cached vote counts
+
+
+PHASE 7 — REPORTS & ADMIN
+- Report blogs
+- Report comments
+- View reports
+- Update report status
+- Admin authorization
+- Delete inappropriate blogs
+- Delete inappropriate comments
+- View/manage users
+
+
+PHASE 8 — FRONTEND
+- Header
+- Footer
+- Home
+- Explore
+- Blog details
+- Login
+- Register
+- Write
+- Edit
+- Profile
+- Admin dashboard
+- Responsive CSS
+- Vanilla JS API integration
+
+
+PHASE 9 — INTEGRATION & TESTING
+- Authentication testing
+- Authorization testing
+- CRUD testing
+- Validation testing
+- Error handling testing
+- Voting testing
+- Comment testing
+- Report testing
+- Admin testing
+- Security testing
+- Responsive UI testing
+
+
+PHASE 10 — DEPLOYMENT
+- Production environment variables
+- MongoDB Atlas
+- Production server
+- HTTPS
+- Deploy frontend/backend
+- Final testing
+
+
+40. FINAL ARCHITECTURE
+----------------------
+
+                         BLOGGR
+                           |
+          +----------------+----------------+
+          |                |                |
+       FRONTEND          BACKEND         DATABASE
+          |                |                |
+    HTML/CSS/JS       Node + Express      MongoDB
+          |                |             Mongoose
+          |                |
+       Fetch API       REST API
+          |                |
+          |          +-----+------+
+          |          |            |
+          |       Routes      Middleware
+          |          |            |
+          |          +-----+------+
+          |                |
+          |           Controllers
+          |                |
+          |             Services
+          |                |
+          |              Models
+          |                |
+          +-------------> MongoDB
+
+
+The core principle:
+
+Frontend:
+"What should the user see and interact with?"
+
+Backend:
+"What is the user actually allowed to do, and what should the
+application do?"
+
+Database:
+"How is the application's persistent data stored and related?"
